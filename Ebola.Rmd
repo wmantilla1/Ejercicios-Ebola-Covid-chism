@@ -1,0 +1,1306 @@
+---
+title: "Ejercicios Ebola/Covid/chism"
+author: "Dr. Willebaldo Mantilla Rios"
+date: "`r Sys.Date()`"
+output: html_document
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+El presente resumen recopila material del curso internacional "Análisis de Brotes y Modelamiento en Salud Pública Bogota 2023", impartido y liderado por la Dra. Zulma M. Cucunubá en la Universidad Javeriana, Bogotá Colombia.Algunos ejemplos son ya aplicados a la actividad del día a día del personal de salud.
+
+
+
+![](tracelac.PNG)
+
+```{r  echo=FALSE, message=FALSE,warning=FALSE}
+library(tidyverse) # contiene ggplot2, dplyr, tidyr, readr, purrr, tibble
+library(readxl) # para leer archivos Excel
+library(binom) # para intervalos de confianza binomiales
+library(knitr) # para crear tablas bonitas con kable()
+library(incidence) # para calcular incidencia y ajustar modelos
+library(epicontacts) # para análisis de contactos epidemiológicos
+library(epitrix) # para ajustar distribuciones
+library(EpiEstim) # para estimar R(t)
+library(janitor)
+library(ggpubr)
+library(ggthemes)
+```
+
+# Datos 1
+
+```{r, echo=FALSE, message=FALSE,warning=FALSE}
+casos <- read_rds("casos.rds")
+
+glimpse(casos)
+```
+
+```{r,  echo=FALSE, message=FALSE,warning=FALSE}
+table(casos$desenlace, useNA = "ifany")
+```
+
+# Desafio 1
+
+```{r,  echo=FALSE, message=FALSE,warning=FALSE}
+muertes <-  sum(casos$desenlace %in% "Muerte")
+
+casos_desenlace_final_conocido <- sum(casos$desenlace %in% c("Muerte", "Recuperacion")) 
+
+CFR <- muertes / casos_desenlace_final_conocido
+
+print(CFR)
+```
+
+#DESAFIO 2 Determine el CFR con sus intervalos de confianza utilizando
+la función binom.confint. Y obtenga este resultado.
+
+```{r,  echo=FALSE, message=FALSE,warning=FALSE}
+
+CFR_con_CI <- binom.confint(muertes, casos_desenlace_final_conocido, method = "exact") %>%
+  kable(caption = "**CFR CON IC**")
+
+CFR_con_CI
+
+```
+
+# DESAFIO3  Incidencia
+
+Calcule la incidencia diaria usando únicamente el primer argumento de la
+función incidence ¿Qué fecha sería la más adecuada? Tenga en cuenta que
+se espera que esta sea la que pueda dar mejor información, es decir la
+menor cantidad de NAs.
+
+```{r,  echo=FALSE, message=FALSE,warning=FALSE}
+incidencia_diaria <- incidence(casos$fecha_inicio_sintomas)
+
+incidencia_diaria
+```
+
+```{r,  echo=FALSE, message=FALSE,warning=FALSE}
+
+incidencia_semanal <- incidence(casos$fecha_inicio_sintomas, 
+                                interval = 7, 
+                                last_date = max(casos$fecha_de_hospitalizacion,
+                                              na.rm = TRUE))
+incidencia_semanal
+
+
+```
+
+# DESAFIO 4 INCIDENCIA SEMANAL
+
+```{r,  echo=FALSE, message=FALSE,warning=FALSE}
+
+
+incidencia_semanal <- incidence(casos$fecha_inicio_sintomas, 
+                                interval = 7, 
+                                last_date = max(casos$fecha_de_hospitalizacion,
+                                              na.rm = TRUE))
+incidencia_semanal
+
+
+plot(incidencia_semanal, border = "black")
+
+```
+
+4.  Tasa de crecimiento
+
+Estimación de la tasa de crecimiento mediante un modelo log-lineal
+
+```{r ,  echo=FALSE, message=FALSE,warning=FALSE}
+
+
+ggplot(as.data.frame(incidencia_semanal)) + 
+  geom_point(aes(x = dates, y = log(counts))) + 
+  scale_x_incidence(incidencia_semanal) +
+  xlab("Semana") +
+  ylab("Incidencia semanal logarítmica") + 
+  theme_minimal()
+```
+
+Ajuste un modelo log-lineal a los datos de incidencia semanal
+
+```{r, echo=FALSE, message=FALSE,warning=FALSE}
+ajuste_modelo <- incidence::fit(incidencia_semanal)
+ajuste_modelo
+```
+
+# DESAFÍO 5
+
+¿Qué observa en este resultado?
+
+Es preferible estimar tasa de crecimiento diaria utilizando el ajuste de
+la incidencia semanal en lugar de la incidencia diaria debido a que los
+datos diarios pueden ser muy volátiles en los primeros días de la curva
+exponencial. Esto puede suceder por varias razones:
+
+Las fluctuaciones naturales, ciclos de informes, retrasos en el reporte
+y los errores de medición, que pueden no reflejar cambios reales en la
+transmisión de la enfermedad.
+
+Los datos diarios pueden tener más lagunas o inexactitudes.
+
+Eventos de superdispersión o las intervenciones de control.
+
+El uso de datos semanales puede suavizar estas fluctuaciones, dando una
+mejor idea de la tendencia subyacente. Al utilizar una media móvil
+semanal, se suavizan estas fluctuaciones, lo que proporciona una imagen
+más clara de la tendencia subyacente. Esto permite mejorar la precisión
+de la estimación y evitar el sesgo de los días de la semana, así como
+mejorar el modelo al reducir el número total de puntos, dado que puede
+ayudar a evitar el sobreajuste y mejorar la generalización del modelo.
+
+Ejemplo: Algunos fenómenos pueden variar sistemáticamente según el día
+de la semana. Por ejemplo, el número de pruebas de COVID-19 realizadas
+podría ser menor los fines de semana, lo que podría afectar a la
+incidencia reportada. Al utilizar una media móvil semanal, se evita este
+tipo de sesgo.
+
+```{r,  echo=FALSE, message=FALSE,warning=FALSE}
+plot(incidencia_semanal, fit = ajuste_modelo)
+
+
+
+```
+
+4.2. Modelo log-lineal con datos truncados
+
+Encuentre una fecha límite adecuada para el modelo log-lineal, en
+función de los rezagos (biológicos y administrativos).
+
+```{r, echo=FALSE, message=FALSE,warning=FALSE}
+summary(as.numeric(casos$fecha_de_hospitalizacion - casos$fecha_inicio_sintomas))
+```
+
+Semanas a descartar al final de la epicurva
+
+```{r,  echo=FALSE, message=FALSE,warning=FALSE}
+semanas_a_descartar <- 2
+fecha_minima <- min(incidencia_diaria$dates)
+fecha_maxima <- max(incidencia_diaria$dates) - semanas_a_descartar * 7
+
+# Para truncar la incidencia semanal
+incidencia_semanal_truncada <- subset(incidencia_semanal, 
+                         from = fecha_minima, 
+                         to = fecha_maxima) # descarte las últimas semanas de datos
+
+# Incidencia diaria truncada. No la usamos para la regresión lineal pero se puede usar más adelante
+incidencia_diaria_truncada <- subset(incidencia_diaria, 
+                        from = fecha_minima, 
+                        to = fecha_maxima) # eliminamos las últimas dos semanas de datos
+```
+
+# Desafio 6
+
+Ahora utilizando los datos truncados incidencia_semanal_truncada vuelva
+a ajustar el modelo logarítmico lineal.
+
+```{r,  echo=FALSE, message=FALSE,warning=FALSE}
+ajuste_modelo_truncado <- incidence::fit(incidencia_semanal_truncada)
+ajuste_modelo_truncado
+
+
+AjusteR2modelo <- summary(ajuste_modelo_truncado$model)$adj.r.squared 
+
+cat("El R cuadrado ajustado es:", AjusteR2modelo, "\n")
+```
+
+# desafio 7
+
+¿Como interpreta estos resultados? ¿Compare los R2 ?
+
+```{r, echo=FALSE, message=FALSE,warning=FALSE}
+plot(incidencia_semanal_truncada, fit = ajuste_modelo_truncado)
+```
+
+¿Qué cambios observa?
+
+Observe las estadísticas resumidas del ajuste:
+
+```{r,  echo=FALSE, message=FALSE,warning=FALSE}
+summary(ajuste_modelo_truncado$model)
+```
+
+4.3. Tasa de crecimiento y tasa de duplicación: extracción de datos
+Estimacion de la tasa de crecimiento
+
+# DESAFÍO 8
+
+Por favor escriba el código para obtener los siguientes valores:
+
+La tasa de crecimiento diaria es: 0.05224047 Intervalo de confianza de
+la tasa de crecimiento diaria (95%): 0.03323024 0.0712507
+
+```{r,  echo=FALSE, message=FALSE,warning=FALSE}
+# Estimación de la tasa de crecimiento diaria
+tasa_crecimiento_diaria <- ajuste_modelo_truncado$info$r
+
+cat("La tasa de crecimiento diaria es:", tasa_crecimiento_diaria, "\n")
+
+
+```
+
+```{r,  echo=FALSE, message=FALSE,warning=FALSE}
+# Intervalo de confianza de la tasa de crecimiento diaria
+tasa_crecimiento_IC <- ajuste_modelo_truncado$info$r.conf
+
+cat("Intervalo de confianza de la tasa de crecimiento diaria (95%):", tasa_crecimiento_IC, "\n")
+```
+
+Estimacion del tiempo de duplicación Esta información también la
+encontrará calculada y lista para utilizar en el objeto
+ajuste_modelo_truncado, que tiene los datos ajustados de incidencia
+semanal truncada.
+
+# DESAFÍO 9
+
+Por favor escriba el código para obtener los siguientes valores: El
+tiempo de duplicación de la epidemia Intervalo de confianza del tiempo
+de duplicación
+
+R:
+
+```{r,  echo=FALSE, message=FALSE,warning=FALSE}
+# Estimación del tiempo de duplicación en días
+tiempo_duplicacion_dias <- ajuste_modelo_truncado$info$doubling
+cat("El tiempo de duplicación de la epidemia es", tiempo_duplicacion_dias, "días\n")
+```
+
+```{r, echo=FALSE, message=FALSE,warning=FALSE}
+# Intervalo de confianza del tiempo de duplicación
+tiempo_duplicacion_IC <- ajuste_modelo_truncado$info$doubling.conf
+cat("Intervalo de confianza del tiempo de duplicación (95%):", tiempo_duplicacion_IC, "\n")
+```
+
+Estimación de numero de reproduccion
+
+Intervalo serial (SI) Para este brote de ébola asumiremos que el
+intervalo serial está descrito por una distribución Gamma de media
+(mean_si) de 8.7 días y con una desviación estándar (std_si) de 6.1
+días. En la práctica del día 4 estudiaremos cómo estimar el intervalo
+serial.
+
+```{r, echo=FALSE, message=FALSE,warning=FALSE}
+# Parametros de la distribución gamma para el invertavlo serial
+mean_si <- 7.6
+std_si <-  4.4
+
+config <- make_config(list(mean_si = mean_si, std_si = std_si)) 
+# t_start y t_end se configuran automáticamente para estimar R en ventanas deslizantes para 1 semana de forma predeterminada.
+
+```
+
+Estimación de la transmisibilidad variable en el tiempo, R(t) Cuando la
+suposición de que (R ) es constante en el tiempo se vuelve insostenible,
+una alternativa es estimar la transmisibilidad variable en el tiempo
+utilizando el número de reproducción instantánea (Rt ). Este enfoque,
+introducido por Cori et al. (2013), se implementa en el paquete
+EpiEstim, el cual estima el Rt para ventanas de tiempo personalizadas,
+utilizando la una distribución de Poisson. A continuación, estimamos la
+transmisibilidad para ventanas de tiempo deslizantes de 1 semana (el
+valor predeterminado de estimate_R):
+
+```{r, echo=FALSE, message=FALSE,warning=FALSE}
+config <- make_config(list(mean_si = mean_si, std_si = std_si)) 
+# t_start y t_end se configuran automáticamente para estimar R en ventanas deslizantes para 1 semana de forma predeterminada
+```
+
+```{r, echo=FALSE, message=FALSE,warning=FALSE}
+# use estimate_R using method = "parametric_si"
+estimacion_rt <- estimate_R(incidencia_diaria_truncada, method = "parametric_si", 
+                            si_data = si_data,
+                            config = config)
+# Observamos las primeras estimaciones de R(t)
+head(estimacion_rt$R[, c("t_start", "t_end", "Median(R)", 
+                         "Quantile.0.025(R)", "Quantile.0.975(R)")])
+```
+
+Grafique la estimación de R como función del tiempo:
+
+```{r}
+plot(estimacion_rt, legend = FALSE)
+```
+
+# Covid
+
+Incidencia Calcule la incidencia diaria usando únicamente el primer
+argumento de la función incidence ¿Qué fecha sería la más adecuada?
+Tenga en cuenta que se espera que esta sea la que pueda dar mejor
+información, es decir la menor cantidad de NAs.
+
+```{r   ,echo=FALSE, message=FALSE,warning=FALSE}
+
+# datos
+library(rio)
+library(here)
+library(tidyverse)
+
+casos <- import(here( "SINAVE_SSA_CDMX_202023.xlsx"))
+
+glimpse(casos)
+casos <- casos %>% 
+  select(SEXO,FECINGRE,FECINISI,CLASCOVID19) %>% 
+  filter(str_detect(CLASCOVID19,pattern = "CONF"))
+
+glimpse(casos)
+
+
+# Asegurarte de que las fechas están en formato de fecha
+casos$FECINISI <- as.Date(casos$FECINISI)
+casos$FECINGRE <- as.Date(casos$FECINGRE)
+
+incidencia_diaria <- incidence(casos$FECINISI)
+
+incidencia_diaria 
+  
+
+
+#incidencia semanal 7 dias
+library(incidence)
+
+
+
+incidencia_semanal <- incidence(casos$FECINISI, 
+                                interval = 7, 
+                                last_date =  max(casos$FECINGRE,
+                                              na.rm = TRUE))
+incidencia_semanal
+
+
+
+
+plot(incidencia_semanal, border = "black")
+
+
+#tasa de crecimiento
+ggplot(as.data.frame(incidencia_semanal)) + 
+  geom_point(aes(x = dates, y = log(counts))) + 
+  scale_x_incidence(incidencia_semanal) +
+  xlab("Semana") +
+  ylab("Incidencia semanal logarítmica") + 
+  theme_minimal()
+
+
+# ajustar modelo por los retrasos de resultados, es decir quitar una semana de resultados
+ajuste_modelo <- incidence::fit(incidencia_semanal)
+ajuste_modelo
+plot(incidencia_semanal, fit = ajuste_modelo)
+
+
+
+
+# ajustar modelo con datos truncados es decir quitando la semana de retraso
+
+summary(as.numeric(casos$FECINGRE - casos$FECINISI))
+
+
+semanas_a_descartar <- 7
+fecha_minima <- min(incidencia_diaria$dates)
+fecha_maxima <- max(incidencia_diaria$dates) - semanas_a_descartar * 7
+
+# Para truncar la incidencia semanal
+incidencia_semanal_truncada <- subset(incidencia_semanal, 
+                         from = fecha_minima, 
+                         to = fecha_maxima) # descarte las últimas semanas de datos
+
+# Incidencia diaria truncada. No la usamos para la regresión lineal pero se puede usar más adelante
+incidencia_diaria_truncada <- subset(incidencia_diaria, 
+                        from = fecha_minima, 
+                        to = fecha_maxima) # eliminamos las últimas dos semanas de datos
+
+
+
+
+
+#modelo ajustado trunacado
+
+ajuste_modelo_truncado <- incidence::fit(incidencia_semanal_truncada)
+ajuste_modelo_truncado
+
+
+AjusteR2modelo <- summary(ajuste_modelo_truncado$model)$adj.r.squared 
+
+cat("El R cuadrado ajustado es:", AjusteR2modelo, "\n")
+
+
+plot(incidencia_semanal_truncada, fit = ajuste_modelo_truncado)
+
+
+
+#numero reproductivo R0
+
+
+# Parametros de la distribución gamma para el invertavlo serial
+mean_si <- 7.6
+std_si <-  4.4
+
+config <- make_config(list(mean_si = mean_si, std_si = std_si)) 
+# t_start y t_end se configuran automáticamente para estimar R en ventanas deslizantes para 1 semana de forma predeterminada.
+
+
+
+# use estimate_R using method = "parametric_si"
+estimacion_rt <- estimate_R(incidencia_diaria_truncada, method = "parametric_si", 
+                            si_data = si_data,
+                            config = config)
+# Observamos las primeras estimaciones de R(t)
+head(estimacion_rt$R[, c("t_start", "t_end", "Median(R)", 
+                         "Quantile.0.025(R)", "Quantile.0.975(R)")])
+
+plot(estimacion_rt, legend = FALSE)
+
+
+
+####
+#COLORES
+
+# use estimate_R using method = "parametric_si"
+estimacion_rt <- estimate_R(incidencia_diaria_truncada, method = "parametric_si", 
+                            si_data = si_data,
+                            config = config)
+# Observamos las primeras estimaciones de R(t)
+head(estimacion_rt$R[, c("t_start", "t_end", "Median(R)", 
+                         "Quantile.0.025(R)", "Quantile.0.975(R)")])
+
+# Personalizar y mejorar la gráfica con colores
+library(ggplot2)
+
+# Crear un data frame para la gráfica
+rt_data <- data.frame(
+  t = estimacion_rt$R$t_start,
+  R_median = estimacion_rt$R$`Median(R)`,
+  R_low = estimacion_rt$R$`Quantile.0.025(R)`,
+  R_high = estimacion_rt$R$`Quantile.0.975(R)`
+)
+
+# Crear la gráfica con ggplot2
+ggplot(rt_data, aes(x = t)) +
+  geom_ribbon(aes(ymin = R_low, ymax = R_high), fill = "grey80", alpha = 0.5) +
+  geom_line(aes(y = R_median), color = "blue", size = 1) +
+  labs(title = "Estimación de R(t)",
+       x = "Tiempo",
+       y = "R(t)") +
+  theme_minimal()
+
+```
+
+# covid 2020
+
+```{r,  echo=FALSE, message=FALSE,warning=FALSE}
+
+# datos
+library(rio)
+library(here)
+library(tidyverse)
+
+casos <- import(here( "ene_dic_2020.xlsx"))
+
+
+
+casos <- casos %>% 
+  select(SEXO,FECINGRE,FECINISI,CLASCOVID19) %>% 
+  filter(str_detect(CLASCOVID19,pattern = "CONF"))
+
+glimpse(casos)
+
+
+# Asegurarte de que las fechas están en formato de fecha
+casos$FECINISI <- as.Date(casos$FECINISI)
+casos$FECINGRE <- as.Date(casos$FECINGRE)
+
+incidencia_diaria <- incidence(casos$FECINISI)
+
+incidencia_diaria 
+  
+
+
+#incidencia semanal 7 dias
+library(incidence)
+
+
+
+incidencia_semanal <- incidence(casos$FECINISI, 
+                                interval = 7, 
+                                last_date =  max(casos$FECINGRE,
+                                              na.rm = TRUE))
+incidencia_semanal
+
+
+
+
+plot(incidencia_semanal, border = "black")
+
+
+#tasa de crecimiento
+ggplot(as.data.frame(incidencia_semanal)) + 
+  geom_point(aes(x = dates, y = log(counts))) + 
+  scale_x_incidence(incidencia_semanal) +
+  xlab("Semana") +
+  ylab("Incidencia semanal logarítmica") + 
+  theme_minimal()
+
+
+# ajustar modelo por los retrasos de resultados, es decir quitar una semana de resultados
+ajuste_modelo <- incidence::fit(incidencia_semanal)
+ajuste_modelo
+plot(incidencia_semanal, fit = ajuste_modelo)
+
+
+
+
+# ajustar modelo con datos truncados es decir quitando la semana de retraso
+
+summary(as.numeric(casos$FECINGRE - casos$FECINISI))
+
+
+semanas_a_descartar <- 1
+fecha_minima <- min(incidencia_diaria$dates)
+fecha_maxima <- max(incidencia_diaria$dates) - semanas_a_descartar * 7
+
+# Para truncar la incidencia semanal
+incidencia_semanal_truncada <- subset(incidencia_semanal, 
+                         from = fecha_minima, 
+                         to = fecha_maxima) # descarte las últimas semanas de datos
+
+# Incidencia diaria truncada. No la usamos para la regresión lineal pero se puede usar más adelante
+incidencia_diaria_truncada <- subset(incidencia_diaria, 
+                        from = fecha_minima, 
+                        to = fecha_maxima) # eliminamos las últimas dos semanas de datos
+
+
+
+
+
+#modelo ajustado trunacado
+
+ajuste_modelo_truncado <- incidence::fit(incidencia_semanal_truncada)
+ajuste_modelo_truncado
+
+
+AjusteR2modelo <- summary(ajuste_modelo_truncado$model)$adj.r.squared 
+
+cat("El R cuadrado ajustado es:", AjusteR2modelo, "\n")
+
+
+plot(incidencia_semanal_truncada, fit = ajuste_modelo_truncado)
+
+
+
+#numero reproductivo R0
+
+
+# Parametros de la distribución gamma para el invertavlo serial
+mean_si <- 7.6
+std_si <-  4.4
+
+config <- make_config(list(mean_si = mean_si, std_si = std_si)) 
+# t_start y t_end se configuran automáticamente para estimar R en ventanas deslizantes para 1 semana de forma predeterminada.
+
+
+
+# use estimate_R using method = "parametric_si"
+estimacion_rt <- estimate_R(incidencia_diaria_truncada, method = "parametric_si", 
+                            si_data = si_data,
+                            config = config)
+# Observamos las primeras estimaciones de R(t)
+head(estimacion_rt$R[, c("t_start", "t_end", "Median(R)", 
+                         "Quantile.0.025(R)", "Quantile.0.975(R)")])
+
+Cov2020<-  plot(estimacion_rt, legend = FALSE)
+
+
+
+####
+#COLORES
+
+# use estimate_R using method = "parametric_si"
+estimacion_rt <- estimate_R(incidencia_diaria_truncada, method = "parametric_si", 
+                            si_data = si_data,
+                            config = config)
+# Observamos las primeras estimaciones de R(t)
+head(estimacion_rt$R[, c("t_start", "t_end", "Median(R)", 
+                         "Quantile.0.025(R)", "Quantile.0.975(R)")])
+
+# Personalizar y mejorar la gráfica con colores
+library(ggplot2)
+
+# Crear un data frame para la gráfica
+rt_data <- data.frame(
+  t = estimacion_rt$R$t_start,
+  R_median = estimacion_rt$R$`Median(R)`,
+  R_low = estimacion_rt$R$`Quantile.0.025(R)`,
+  R_high = estimacion_rt$R$`Quantile.0.975(R)`
+)
+
+# Crear la gráfica con ggplot2
+ggplot(rt_data, aes(x = t)) +
+  geom_ribbon(aes(ymin = R_low, ymax = R_high), fill = "grey80", alpha = 0.5) +
+  geom_line(aes(y = R_median), color = "blue", size = 1) +
+  labs(title = "Estimación de R(t)",
+       x = "Tiempo",
+       y = "R(t)") +
+  theme_minimal()
+
+```
+
+# Covid 2021
+
+```{r,  echo=FALSE, message=FALSE,warning=FALSE}
+
+# datos
+library(rio)
+library(here)
+library(tidyverse)
+
+casos <- import(here( "ene_dic_2021.xlsx"))
+
+
+
+casos <- casos %>% 
+  select(SEXO,FECINGRE,FECINISI,CLASCOVID19) %>% 
+  filter(str_detect(CLASCOVID19,pattern = "CONF"))
+
+glimpse(casos)
+
+
+# Asegurarte de que las fechas están en formato de fecha
+casos$FECINISI <- as.Date(casos$FECINISI)
+casos$FECINGRE <- as.Date(casos$FECINGRE)
+
+incidencia_diaria <- incidence(casos$FECINISI)
+
+incidencia_diaria 
+  
+plot(incidencia_diaria, border = "black")
+
+#incidencia semanal 7 dias
+library(incidence)
+
+
+
+incidencia_semanal <- incidence(casos$FECINISI, 
+                                interval = 7, 
+                                last_date =  max(casos$FECINGRE,
+                                              na.rm = TRUE))
+incidencia_semanal
+
+
+
+
+plot(incidencia_semanal, border = "black")
+
+
+#tasa de crecimiento
+ggplot(as.data.frame(incidencia_semanal)) + 
+  geom_point(aes(x = dates, y = log(counts))) + 
+  scale_x_incidence(incidencia_semanal) +
+  xlab("Semana") +
+  ylab("Incidencia semanal logarítmica") + 
+  theme_minimal()
+
+
+# ajustar modelo por los retrasos de resultados, es decir quitar una semana de resultados
+ajuste_modelo <- incidence::fit(incidencia_semanal)
+ajuste_modelo
+plot(incidencia_semanal, fit = ajuste_modelo)
+
+
+
+
+# ajustar modelo con datos truncados es decir quitando la semana de retraso
+
+summary(as.numeric(casos$FECINGRE - casos$FECINISI))
+
+
+semanas_a_descartar <- 1
+fecha_minima <- min(incidencia_diaria$dates)
+fecha_maxima <- max(incidencia_diaria$dates) - semanas_a_descartar * 7
+
+# Para truncar la incidencia semanal
+incidencia_semanal_truncada <- subset(incidencia_semanal, 
+                         from = fecha_minima, 
+                         to = fecha_maxima) # descarte las últimas semanas de datos
+
+# Incidencia diaria truncada. No la usamos para la regresión lineal pero se puede usar más adelante
+incidencia_diaria_truncada <- subset(incidencia_diaria, 
+                        from = fecha_minima, 
+                        to = fecha_maxima) # eliminamos las últimas dos semanas de datos
+
+
+
+
+
+#modelo ajustado trunacado
+
+ajuste_modelo_truncado <- incidence::fit(incidencia_semanal_truncada)
+ajuste_modelo_truncado
+
+
+AjusteR2modelo <- summary(ajuste_modelo_truncado$model)$adj.r.squared 
+
+cat("El R cuadrado ajustado es:", AjusteR2modelo, "\n")
+
+
+plot(incidencia_semanal_truncada, fit = ajuste_modelo_truncado)
+
+
+
+#numero reproductivo R0
+
+
+# Parametros de la distribución gamma para el invertavlo serial
+mean_si <- 7.6
+std_si <-  4.4
+
+config <- make_config(list(mean_si = mean_si, std_si = std_si)) 
+# t_start y t_end se configuran automáticamente para estimar R en ventanas deslizantes para 1 semana de forma predeterminada.
+
+
+
+# use estimate_R using method = "parametric_si"
+estimacion_rt <- estimate_R(incidencia_diaria_truncada, method = "parametric_si", 
+                            si_data = si_data,
+                            config = config)
+# Observamos las primeras estimaciones de R(t)
+head(estimacion_rt$R[, c("t_start", "t_end", "Median(R)", 
+                         "Quantile.0.025(R)", "Quantile.0.975(R)")])
+
+Cov2021<- plot(estimacion_rt, legend = FALSE)
+
+
+
+####
+#COLORES
+
+# use estimate_R using method = "parametric_si"
+estimacion_rt <- estimate_R(incidencia_diaria_truncada, method = "parametric_si", 
+                            si_data = si_data,
+                            config = config)
+# Observamos las primeras estimaciones de R(t)
+head(estimacion_rt$R[, c("t_start", "t_end", "Median(R)", 
+                         "Quantile.0.025(R)", "Quantile.0.975(R)")])
+
+# Personalizar y mejorar la gráfica con colores
+library(ggplot2)
+
+# Crear un data frame para la gráfica
+rt_data <- data.frame(
+  t = estimacion_rt$R$t_start,
+  R_median = estimacion_rt$R$`Median(R)`,
+  R_low = estimacion_rt$R$`Quantile.0.025(R)`,
+  R_high = estimacion_rt$R$`Quantile.0.975(R)`
+)
+
+# Crear la gráfica con ggplot2
+ggplot(rt_data, aes(x = t)) +
+  geom_ribbon(aes(ymin = R_low, ymax = R_high), fill = "grey80", alpha = 0.5) +
+  geom_line(aes(y = R_median), color = "blue", size = 1) +
+  labs(title = "Estimación de R(t)",
+       x = "Tiempo",
+       y = "R(t)") +
+  theme_minimal()
+
+```
+
+# Covid 2022
+
+```{r,   echo=FALSE, message=FALSE,warning=FALSE}
+# datos
+library(rio)
+library(here)
+library(tidyverse)
+
+casos <- import(here( "ene_dic_2022.xlsx"))
+
+
+
+casos <- casos %>% 
+  select(SEXO,FECINGRE,FECINISI,CLASCOVID19) %>% 
+  filter(str_detect(CLASCOVID19,pattern = "CONF"))
+
+glimpse(casos)
+
+
+# Asegurarte de que las fechas están en formato de fecha
+casos$FECINISI <- as.Date(casos$FECINISI)
+casos$FECINGRE <- as.Date(casos$FECINGRE)
+
+incidencia_diaria <- incidence(casos$FECINISI)
+
+incidencia_diaria 
+  
+plot(incidencia_diaria, border = "black")
+
+#incidencia semanal 7 dias
+library(incidence)
+
+
+
+incidencia_semanal <- incidence(casos$FECINISI, 
+                                interval = 7, 
+                                last_date =  max(casos$FECINGRE,
+                                              na.rm = TRUE))
+incidencia_semanal
+
+
+
+
+plot(incidencia_semanal, border = "black")
+
+
+#tasa de crecimiento
+ggplot(as.data.frame(incidencia_semanal)) + 
+  geom_point(aes(x = dates, y = log(counts))) + 
+  scale_x_incidence(incidencia_semanal) +
+  xlab("Semana") +
+  ylab("Incidencia semanal logarítmica") + 
+  theme_minimal()
+
+
+# ajustar modelo por los retrasos de resultados, es decir quitar una semana de resultados
+ajuste_modelo <- incidence::fit(incidencia_semanal)
+ajuste_modelo
+plot(incidencia_semanal, fit = ajuste_modelo)
+
+
+
+
+# ajustar modelo con datos truncados es decir quitando la semana de retraso
+
+summary(as.numeric(casos$FECINGRE - casos$FECINISI))
+
+
+semanas_a_descartar <- 1
+fecha_minima <- min(incidencia_diaria$dates)
+fecha_maxima <- max(incidencia_diaria$dates) - semanas_a_descartar * 7
+
+# Para truncar la incidencia semanal
+incidencia_semanal_truncada <- subset(incidencia_semanal, 
+                         from = fecha_minima, 
+                         to = fecha_maxima) # descarte las últimas semanas de datos
+
+# Incidencia diaria truncada. No la usamos para la regresión lineal pero se puede usar más adelante
+incidencia_diaria_truncada <- subset(incidencia_diaria, 
+                        from = fecha_minima, 
+                        to = fecha_maxima) # eliminamos las últimas dos semanas de datos
+
+
+
+
+
+#modelo ajustado trunacado
+
+ajuste_modelo_truncado <- incidence::fit(incidencia_semanal_truncada)
+ajuste_modelo_truncado
+
+
+AjusteR2modelo <- summary(ajuste_modelo_truncado$model)$adj.r.squared 
+
+cat("El R cuadrado ajustado es:", AjusteR2modelo, "\n")
+
+
+plot(incidencia_semanal_truncada, fit = ajuste_modelo_truncado)
+
+
+
+#numero reproductivo R0
+
+
+# Parametros de la distribución gamma para el invertavlo serial
+mean_si <- 7.6
+std_si <-  4.4
+
+config <- make_config(list(mean_si = mean_si, std_si = std_si)) 
+# t_start y t_end se configuran automáticamente para estimar R en ventanas deslizantes para 1 semana de forma predeterminada.
+
+
+
+# use estimate_R using method = "parametric_si"
+estimacion_rt <- estimate_R(incidencia_diaria_truncada, method = "parametric_si", 
+                            si_data = si_data,
+                            config = config)
+# Observamos las primeras estimaciones de R(t)
+head(estimacion_rt$R[, c("t_start", "t_end", "Median(R)", 
+                         "Quantile.0.025(R)", "Quantile.0.975(R)")])
+
+Cov2022<- plot(estimacion_rt, legend = FALSE)
+
+
+
+####
+#COLORES
+
+# use estimate_R using method = "parametric_si"
+estimacion_rt <- estimate_R(incidencia_diaria_truncada, method = "parametric_si", 
+                            si_data = si_data,
+                            config = config)
+# Observamos las primeras estimaciones de R(t)
+head(estimacion_rt$R[, c("t_start", "t_end", "Median(R)", 
+                         "Quantile.0.025(R)", "Quantile.0.975(R)")])
+
+# Personalizar y mejorar la gráfica con colores
+library(ggplot2)
+
+# Crear un data frame para la gráfica
+rt_data <- data.frame(
+  t = estimacion_rt$R$t_start,
+  R_median = estimacion_rt$R$`Median(R)`,
+  R_low = estimacion_rt$R$`Quantile.0.025(R)`,
+  R_high = estimacion_rt$R$`Quantile.0.975(R)`
+)
+
+# Crear la gráfica con ggplot2
+ggplot(rt_data, aes(x = t)) +
+  geom_ribbon(aes(ymin = R_low, ymax = R_high), fill = "grey80", alpha = 0.5) +
+  geom_line(aes(y = R_median), color = "blue", size = 1) +
+  labs(title = "Estimación de R(t)",
+       x = "Tiempo",
+       y = "R(t)") +
+  theme_minimal()
+
+```
+
+# Covid 2023
+
+```{r,  echo=FALSE, message=FALSE,warning=FALSE}
+# datos
+library(rio)
+library(here)
+library(tidyverse)
+
+casos <- import(here( "ene_dic_2023.xlsx"))
+
+
+
+casos <- casos %>% 
+  select(SEXO,FECINGRE,FECINISI,CLASCOVID19) %>% 
+  filter(str_detect(CLASCOVID19,pattern = "CONF"))
+
+glimpse(casos)
+
+
+# Asegurarte de que las fechas están en formato de fecha
+casos$FECINISI <- as.Date(casos$FECINISI)
+casos$FECINGRE <- as.Date(casos$FECINGRE)
+
+incidencia_diaria <- incidence(casos$FECINISI)
+
+incidencia_diaria 
+  
+plot(incidencia_diaria, border = "black")
+
+#incidencia semanal 7 dias
+library(incidence)
+
+
+
+incidencia_semanal <- incidence(casos$FECINISI, 
+                                interval = 7, 
+                                last_date =  max(casos$FECINGRE,
+                                              na.rm = TRUE))
+incidencia_semanal
+
+
+
+
+plot(incidencia_semanal, border = "black")
+
+
+#tasa de crecimiento
+ggplot(as.data.frame(incidencia_semanal)) + 
+  geom_point(aes(x = dates, y = log(counts))) + 
+  scale_x_incidence(incidencia_semanal) +
+  xlab("Semana") +
+  ylab("Incidencia semanal logarítmica") + 
+  theme_minimal()
+
+
+# ajustar modelo por los retrasos de resultados, es decir quitar una semana de resultados
+ajuste_modelo <- incidence::fit(incidencia_semanal)
+ajuste_modelo
+plot(incidencia_semanal, fit = ajuste_modelo)
+
+
+
+
+# ajustar modelo con datos truncados es decir quitando la semana de retraso
+
+summary(as.numeric(casos$FECINGRE - casos$FECINISI))
+
+
+semanas_a_descartar <- 1
+fecha_minima <- min(incidencia_diaria$dates)
+fecha_maxima <- max(incidencia_diaria$dates) - semanas_a_descartar * 7
+
+# Para truncar la incidencia semanal
+incidencia_semanal_truncada <- subset(incidencia_semanal, 
+                         from = fecha_minima, 
+                         to = fecha_maxima) # descarte las últimas semanas de datos
+
+# Incidencia diaria truncada. No la usamos para la regresión lineal pero se puede usar más adelante
+incidencia_diaria_truncada <- subset(incidencia_diaria, 
+                        from = fecha_minima, 
+                        to = fecha_maxima) # eliminamos las últimas dos semanas de datos
+
+
+
+
+
+#modelo ajustado trunacado
+
+ajuste_modelo_truncado <- incidence::fit(incidencia_semanal_truncada)
+ajuste_modelo_truncado
+
+
+AjusteR2modelo <- summary(ajuste_modelo_truncado$model)$adj.r.squared 
+
+cat("El R cuadrado ajustado es:", AjusteR2modelo, "\n")
+
+
+plot(incidencia_semanal_truncada, fit = ajuste_modelo_truncado)
+
+
+
+#numero reproductivo R0
+
+
+# Parametros de la distribución gamma para el invertavlo serial
+mean_si <- 5
+std_si <-  3.1
+
+config <- make_config(list(mean_si = mean_si, std_si = std_si)) 
+# t_start y t_end se configuran automáticamente para estimar R en ventanas deslizantes para 1 semana de forma predeterminada.
+
+
+
+# use estimate_R using method = "parametric_si"
+estimacion_rt <- estimate_R(incidencia_diaria_truncada, method = "parametric_si", 
+                            si_data = si_data,
+                            config = config)
+# Observamos las primeras estimaciones de R(t)
+head(estimacion_rt$R[, c("t_start", "t_end", "Median(R)", 
+                         "Quantile.0.025(R)", "Quantile.0.975(R)")])
+
+Cov2023<-  plot(estimacion_rt, legend = FALSE)
+
+
+
+####
+#COLORES
+
+# use estimate_R using method = "parametric_si"
+estimacion_rt <- estimate_R(incidencia_diaria_truncada, method = "parametric_si", 
+                            si_data = si_data,
+                            config = config)
+# Observamos las primeras estimaciones de R(t)
+head(estimacion_rt$R[, c("t_start", "t_end", "Median(R)", 
+                         "Quantile.0.025(R)", "Quantile.0.975(R)")])
+
+# Personalizar y mejorar la gráfica con colores
+library(ggplot2)
+
+# Crear un data frame para la gráfica
+rt_data <- data.frame(
+  t = estimacion_rt$R$t_start,
+  R_median = estimacion_rt$R$`Median(R)`,
+  R_low = estimacion_rt$R$`Quantile.0.025(R)`,
+  R_high = estimacion_rt$R$`Quantile.0.975(R)`
+)
+
+# Crear la gráfica con ggplot2
+ggplot(rt_data, aes(x = t)) +
+  geom_ribbon(aes(ymin = R_low, ymax = R_high), fill = "grey80", alpha = 0.5) +
+  geom_line(aes(y = R_median), color = "blue", size = 1) +
+  labs(title = "Estimación de R(t)",
+       x = "Tiempo",
+       y = "R(t)") +
+  theme_minimal()
+
+
+
+
+
+
+
+```
+
+# todas las graficas
+
+```{r, echo=FALSE, message=FALSE,warning=FALSE}
+#install.packages("cowplot")
+library(cowplot)
+
+cowplot::plot_grid(Cov2020, 
+                   Cov2021, 
+                   ncol = 2)
+```
+
+# chismografo
+
+## interen en PF
+
+```{r, echo=FALSE, message=FALSE,warning=FALSE}
+
+library(rio)
+
+
+# Cargar los datos y cambiar nombres de variables con rename
+chis<- import("chis.xlsx") %>%  
+  clean_names() %>% 
+  select(edad,sexo,identidad_orientacion_sexual,x1_has_tenido_relaciones_sexuales,x7_alguna_vez_has_acudido_algun_centro_de_salud_para_solicitar_una_consulta_consejeria_u_orientacion,x8_has_pensado_en_utilizar_algun_metodo_para_evitar_un_embarazo_no_deseado,por_cual_metodo_esta_interesada_o,x9_te_gustaria_recibir_informacion_y_consejeria_sobre_sexualidad_y_metodos_de_planificacion_familiar)  %>% 
+  rename(
+    edad = edad,
+    sexo = sexo,
+    identidad_orientacion_sexual = identidad_orientacion_sexual,
+    relaciones_sexuales = x1_has_tenido_relaciones_sexuales,
+    visita_centro_salud_consulta_consejeria_orientacion = x7_alguna_vez_has_acudido_algun_centro_de_salud_para_solicitar_una_consulta_consejeria_u_orientacion,
+    metodo_evitar_embarazo_no_deseado = x8_has_pensado_en_utilizar_algun_metodo_para_evitar_un_embarazo_no_deseado,
+    metodo_interesada = por_cual_metodo_esta_interesada_o,
+    gustaria_recibir_informacion_consejeria_sexualidad_planificacion_familiar = x9_te_gustaria_recibir_informacion_y_consejeria_sobre_sexualidad_y_metodos_de_planificacion_familiar
+  )
+
+# Crear gráfico de barras con etiquetas de casos y porcentajes
+#PF <- 
+ggplot(chis, aes(x = gustaria_recibir_informacion_consejeria_sexualidad_planificacion_familiar)) +
+  geom_bar(fill = "#30A7E3", color = "black", position = "dodge") +
+  geom_text(stat = "count", aes(label = paste(stat(count), " (", scales::percent(stat(count)/sum(stat(count))), ")", sep = ""),
+            group = gustaria_recibir_informacion_consejeria_sexualidad_planificacion_familiar),
+            position = position_dodge(width = 0.9),
+            vjust = 1, size = 3) +
+  labs(title = "Interés en recibir información sobre MPF",
+       x = "Respuesta",
+       y = "Frecuencia",
+       caption = "Fuente: Formulario PF") +
+  scale_y_continuous(labels = scales::percent_format(scale = 1), expand = c(0, 0)) +
+  theme_pubclean()
+
+# Guardar la gráfica en un archivo (formato PNG)
+#ggsave("grafica_interes_mpfp.png", plot = PF, width = 8, height = 6, units = "in", dpi = 300)
+
+```
+
+# metodo para evitar emb
+
+```{r, echo=FALSE, message=FALSE,warning=FALSE}
+# Crear gráfico de barras con etiquetas de casos y porcentajes para la variable x8
+#METODO<- 
+ggplot(chis, aes(x = metodo_evitar_embarazo_no_deseado)) +
+  geom_bar(fill = "#30A7E3", color = "black", position = "dodge") +
+  geom_text(stat = "count", aes(label = paste(stat(count), " (", scales::percent(stat(count)/sum(stat(count))), ")", sep = ""),
+            group = metodo_evitar_embarazo_no_deseado),
+            position = position_dodge(width = 0.9),
+            vjust = 1, size = 3) +
+  labs(title = "Consideración de utilizar algún método para evitar un embarazo no deseado",
+       x = "Respuesta",
+       y = "Frecuencia") +
+  scale_y_continuous(labels = scales::percent_format(scale = 1), expand = c(0, 0)) +
+  theme_pubclean()
+
+
+# Guardar la gráfica en un archivo (formato PNG)
+#ggsave("grafica_METODO.png", plot = METODO, width = 8, height = 6, units = "in", dpi = 300)
+```
+
+# relaciones sexuales
+
+```{r, echo=FALSE, message=FALSE,warning=FALSE}
+# Crear gráfico de barras con etiquetas de casos y porcentajes para la variable x1
+#RELA <-
+ggplot(chis, aes(x = relaciones_sexuales)) +
+  geom_bar(fill = "#30A7E3", color = "black", position = "dodge") +
+  geom_text(stat = "count", aes(label = paste(stat(count), " (", scales::percent(stat(count)/sum(stat(count))), ")", sep = ""),
+            group = relaciones_sexuales),
+            position = position_dodge(width = 0.9),
+            vjust = 1, size = 3) +
+  labs(title = "Experiencia en relaciones sexuales",
+       x = "Respuesta",
+       y = "Frecuencia") +
+  scale_y_continuous(labels = scales::percent_format(scale = 1), expand = c(0, 0)) +
+  theme_pubclean()
+
+# Guardar la gráfica en un archivo (formato PNG)
+#ggsave("grafica_RELA.png", plot = RELA, width = 8, height = 6, units = "in", dpi = 300)
+
+```
+
+# orientacion sexual
+
+```{r}
+# Crear gráfico de barras horizontales con etiquetas de casos y porcentajes para la variable identidad_orientacion_sexual
+#ORIENTACION <- 
+ggplot(chis, aes(y = identidad_orientacion_sexual)) +
+  geom_bar(fill = "#30A7E3", color = "black", position = "dodge", width = 0.8) +
+  geom_text(stat = "count", aes(label = paste(stat(count), " (", scales::percent(stat(count)/sum(stat(count))), ")", sep = ""),
+            group = identidad_orientacion_sexual),
+            position = position_dodge(width = 0.9),
+            hjust = -0.1, size = 3) +
+  labs(title = "Identidad u orientación sexual",
+       y = "Respuesta",
+       x = "Frecuencia") +
+  scale_x_continuous(labels = scales::percent_format(scale = 1), expand = c(0, 0)) +
+  theme_pubclean()
+
+# Guardar la gráfica en un archivo (formato PNG)
+#ggsave("graficaORIENTACION.png", plot = ORIENTACION, width = 8, height = 6, units = "in", dpi = 300)
+```
+
+# edad
+
+```{r}
+# Crear gráfico de barras horizontales con etiquetas de casos y porcentajes para la variable edad (eliminando edades a partir de 20 años)
+#EDAD<- 
+ggplot(chis, aes(y = edad)) +
+  geom_bar(fill = "#30A7E3", color = "black", position = "dodge") +
+  geom_text(stat = "count", aes(label = paste(stat(count), " (", scales::percent(stat(count)/sum(stat(count))), ")", sep = ""),
+            group = edad),
+            position = position_dodge(width = 0.9),
+            hjust = 1, size = 2) +
+  labs(title = "Distribución por edad",
+       y = "Edad",
+       x = "Frecuencia y %") +
+  scale_x_continuous(labels = scales::percent_format(scale = 1), expand = c(0, 0)) +
+  theme_pubclean() +
+  coord_cartesian(ylim = c(11, 20))  # Establecer límite en el eje y hasta 20 años
+
+# Guardar la gráfica en un archivo (formato PNG)
+#ggsave("graficaEDAD.png", plot = EDAD, width = 8, height = 6, units = "in", dpi = 300)
+
+```
+
+# regresion edad vs metodo
+
+```{r, echo=FALSE, message=FALSE,warning=FALSE}
+# Crear una tabla de contingencia
+tabla_contingencia <- table(chis$sexo, chis$relaciones_sexuales)
+
+# Realizar el test de chi-cuadrado
+resultado_chi_cuadrado <- chisq.test(tabla_contingencia)
+
+# Imprimir los resultados
+print(resultado_chi_cuadrado)
+
+
+```
+
+#Orientacion en la unidad
+
+```{r, echo=FALSE, message=FALSE,warning=FALSE}
+# Crear gráfico de barras con etiquetas de casos y porcentajes para la variable
+#visita<- 
+ggplot(chis, aes(y = visita_centro_salud_consulta_consejeria_orientacion)) +
+  geom_bar(fill = "#30A7E3", color = "black", position = "dodge", width = 0.8) +
+  geom_text(stat = "count", aes(label = paste(stat(count), " (", scales::percent(stat(count)/sum(stat(count))), ")", sep = ""),
+            group = visita_centro_salud_consulta_consejeria_orientacion),
+            position = position_dodge(width = 0.9),
+            hjust = 1, size = 3) +
+  labs(title = "Visita a centro de salud para solicitar consulta, consejería u orientación",
+       y = "Respuesta",
+       x = "Frecuencia") +
+  scale_x_continuous(labels = scales::percent_format(scale = 1), expand = c(0, 0)) +
+  theme_pubclean()
+
+# Guardar la gráfica en un archivo (formato PNG)
+#ggsave("graficavisita.png", plot = visita, width = 8, height = 6, units = "in", dpi = 300)
+
+```
